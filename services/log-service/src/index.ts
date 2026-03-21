@@ -1,21 +1,9 @@
-import express from 'express';
-import { errorHandler, createServiceLogger } from '@game-backend/shared';
+import { createServiceLogger } from '@game-backend/shared';
 import { config } from './config';
 import { connectRabbitMQ } from './publisher';
-import logRoutes from './routes/log.routes';
+import app from './app';
 
 const logger = createServiceLogger('log-service');
-const app = express();
-
-app.use(express.json());
-
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', service: 'log-service' });
-});
-
-app.use('/logs', logRoutes);
-
-app.use(errorHandler);
 
 async function start() {
   await connectRabbitMQ(config.rabbitmqUrl);

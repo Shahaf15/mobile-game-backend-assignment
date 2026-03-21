@@ -9,9 +9,19 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
-    "clean": "rm -rf packages/*/dist services/*/dist"
+    "clean": "rm -rf packages/*/dist services/*/dist",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "engines": {
     "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "@types/supertest": "^7.2.0",
+    "@vitest/coverage-v8": "^4.1.0",
+    "mongodb-memory-server": "^11.0.1",
+    "supertest": "^7.2.2",
+    "vitest": "^4.1.0"
   }
 }

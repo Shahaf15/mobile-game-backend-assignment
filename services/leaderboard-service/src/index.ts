@@ -1,20 +1,8 @@
-import express from 'express';
-import { connectMongo, errorHandler, createServiceLogger } from '@game-backend/shared';
+import { connectMongo, createServiceLogger } from '@game-backend/shared';
 import { config } from './config';
-import leaderboardRoutes from './routes/leaderboard.routes';
+import app from './app';
 
 const logger = createServiceLogger('leaderboard-service');
-const app = express();
-
-app.use(express.json());
-
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', service: 'leaderboard-service' });
-});
-
-app.use('/players/leaderboard', leaderboardRoutes);
-
-app.use(errorHandler);
 
 async function start() {
   await connectMongo(config.mongoUri);
