@@ -41,7 +41,4 @@ const playerSchema = new Schema<PlayerDocument>(
   }
 );
 
-playerSchema.index({ username: 1 }, { unique: true });
-playerSchema.index({ email: 1 }, { unique: true });
-
 export const Player = mongoose.model<PlayerDocument>('Player', playerSchema);

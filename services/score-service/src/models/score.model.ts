@@ -16,6 +16,9 @@ const scoreSchema = new Schema<ScoreDocument>(
       required: true,
       min: 0,
     },
+    metadata: {
+      type: Schema.Types.Mixed,
+    },
   },
   {
     timestamps: { createdAt: true, updatedAt: false },

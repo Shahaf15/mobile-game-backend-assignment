@@ -1,4 +1,4 @@
-import amqplib from 'amqplib';
+import amqplib, { ChannelModel, Channel, ConsumeMessage } from 'amqplib';
 import { createServiceLogger } from '@game-backend/shared';
 import { BatchProcessor } from './batch-processor';
 import { TokenBucketRateLimiter } from './rate-limiter';
@@ -17,10 +17,8 @@ export async function startWorker(): Promise<void> {
   const maxRetries = 10;
   const retryDelay = 3000;
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let connection: any = null;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let channel: any = null;
+  let connection: ChannelModel | null = null;
+  let channel: Channel | null = null;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
@@ -36,8 +34,12 @@ export async function startWorker(): Promise<void> {
     }
   }
 
+  // Guaranteed non-null: the loop above throws if all retries fail
+  const ch = channel!;
+  const conn = connection!;
+
   // Set prefetch for concurrency control at the consumer level
-  await channel.prefetch(config.prefetchCount);
+  await ch.prefetch(config.prefetchCount);
 
   const rateLimiter = new TokenBucketRateLimiter(config.maxTokens, config.refillRate);
   const semaphore = new Semaphore(config.maxConcurrency);
@@ -60,7 +62,7 @@ export async function startWorker(): Promise<void> {
     'Worker configuration loaded'
   );
 
-  await channel.consume(QUEUE_NAME, (msg: any) => {
+  await ch.consume(QUEUE_NAME, (msg: ConsumeMessage | null) => {
     if (!msg) return;
 
     try {
@@ -68,12 +70,12 @@ export async function startWorker(): Promise<void> {
 
       batchProcessor.add({
         logData,
-        ack: () => channel.ack(msg),
-        nack: (requeue: boolean) => channel.nack(msg, false, requeue),
+        ack: () => ch.ack(msg),
+        nack: (requeue: boolean) => ch.nack(msg, false, requeue),
       });
     } catch (error) {
       logger.error({ error }, 'Failed to parse message');
-      channel.nack(msg, false, false); // discard malformed messages
+      ch.nack(msg, false, false); // discard malformed messages
     }
   });
 
@@ -89,8 +91,8 @@ export async function startWorker(): Promise<void> {
   const shutdown = async () => {
     logger.info('Shutting down worker...');
     try {
-      await channel.close();
-      await connection.close();
+      await ch.close();
+      await conn.close();
     } catch {
       // ignore close errors during shutdown
     }

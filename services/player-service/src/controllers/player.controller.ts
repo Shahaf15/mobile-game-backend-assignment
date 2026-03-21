@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import mongoose from 'mongoose';
 import { Player } from '../models/player.model';
 import { createServiceLogger } from '@game-backend/shared';
 
@@ -30,8 +31,8 @@ export async function createPlayer(
       experiencePoints: saved.experiencePoints,
       createdAt: saved.createdAt,
     });
-  } catch (error: any) {
-    if (error.code === 11000) {
+  } catch (error) {
+    if ((error as { code?: number }).code === 11000) {
       res.status(409).json({ error: 'Username or email already exists' });
       return;
     }
@@ -45,7 +46,13 @@ export async function getPlayer(
   next: NextFunction
 ): Promise<void> {
   try {
-    const { playerId } = req.params;
+    const { playerId } = req.params as { playerId: string };
+
+    if (!mongoose.Types.ObjectId.isValid(playerId)) {
+      res.status(400).json({ error: 'Invalid playerId format' });
+      return;
+    }
+
     const player = await Player.findById(playerId);
 
     if (!player) {
@@ -65,8 +72,13 @@ export async function updatePlayer(
   next: NextFunction
 ): Promise<void> {
   try {
-    const { playerId } = req.params;
+    const { playerId } = req.params as { playerId: string };
     const updates = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(playerId)) {
+      res.status(400).json({ error: 'Invalid playerId format' });
+      return;
+    }
 
     if (Object.keys(updates).length === 0) {
       res.status(400).json({ error: 'No fields to update' });
@@ -85,8 +97,8 @@ export async function updatePlayer(
 
     logger.info({ playerId }, 'Player updated');
     res.json(player);
-  } catch (error: any) {
-    if (error.code === 11000) {
+  } catch (error) {
+    if ((error as { code?: number }).code === 11000) {
       res.status(409).json({ error: 'Username or email already exists' });
       return;
     }
@@ -100,7 +112,13 @@ export async function deletePlayer(
   next: NextFunction
 ): Promise<void> {
   try {
-    const { playerId } = req.params;
+    const { playerId } = req.params as { playerId: string };
+
+    if (!mongoose.Types.ObjectId.isValid(playerId)) {
+      res.status(400).json({ error: 'Invalid playerId format' });
+      return;
+    }
+
     const player = await Player.findByIdAndDelete(playerId);
 
     if (!player) {

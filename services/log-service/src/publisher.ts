@@ -1,4 +1,4 @@
-import amqplib from 'amqplib';
+import amqplib, { ChannelModel, Channel } from 'amqplib';
 import { createServiceLogger, LOG_PRIORITY_MAP, LogLevel } from '@game-backend/shared';
 
 const logger = createServiceLogger('log-publisher');
@@ -8,23 +8,21 @@ const QUEUE_NAME = 'logs.queue';
 const ROUTING_KEY = 'log.ingest';
 const MAX_PRIORITY = 10;
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let connection: any = null;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let channel: any = null;
+let connection: ChannelModel | null = null;
+let channel: Channel | null = null;
+let rabbitmqUrl: string = '';
+let isReconnecting = false;
 
 async function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export async function connectRabbitMQ(url: string): Promise<void> {
-  const maxRetries = 10;
-  const retryDelay = 3000;
-
+async function connect(url: string, maxRetries = 10, retryDelay = 3000): Promise<void> {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      connection = await amqplib.connect(url);
-      channel = await connection.createChannel();
+      const model = await amqplib.connect(url);
+      connection = model;
+      channel = await model.createChannel();
 
       await channel.assertExchange(EXCHANGE_NAME, 'direct', { durable: true });
       await channel.assertQueue(QUEUE_NAME, {
@@ -40,7 +38,19 @@ export async function connectRabbitMQ(url: string): Promise<void> {
       });
 
       connection.on('close', () => {
-        logger.warn('RabbitMQ connection closed');
+        logger.warn('RabbitMQ connection closed — scheduling reconnect');
+        channel = null;
+        connection = null;
+        if (!isReconnecting) {
+          isReconnecting = true;
+          sleep(retryDelay)
+            .then(() => connect(rabbitmqUrl))
+            .then(() => { isReconnecting = false; })
+            .catch((err) => {
+              isReconnecting = false;
+              logger.error({ err }, 'RabbitMQ reconnect failed');
+            });
+        }
       });
 
       return;
@@ -52,6 +62,11 @@ export async function connectRabbitMQ(url: string): Promise<void> {
       await sleep(retryDelay);
     }
   }
+}
+
+export async function connectRabbitMQ(url: string): Promise<void> {
+  rabbitmqUrl = url;
+  await connect(url);
 }
 
 export function publishLog(logEntry: Record<string, unknown>): boolean {
@@ -77,6 +92,7 @@ export function publishLog(logEntry: Record<string, unknown>): boolean {
 }
 
 export async function closeRabbitMQ(): Promise<void> {
+  isReconnecting = true; // prevent reconnect loop on intentional close
   if (channel) await channel.close();
   if (connection) await connection.close();
 }

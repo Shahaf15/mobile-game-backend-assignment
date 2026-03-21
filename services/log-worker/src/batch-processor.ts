@@ -23,6 +23,7 @@ interface BufferedMessage {
 export class BatchProcessor {
   private buffer: BufferedMessage[] = [];
   private timer: NodeJS.Timeout | null = null;
+  private flushPromise: Promise<void> | null = null;
   private flushCount = 0;
   private totalProcessed = 0;
 
@@ -37,18 +38,25 @@ export class BatchProcessor {
     this.buffer.push(message);
 
     if (this.buffer.length >= this.batchSize) {
-      this.flush();
+      this.scheduleFlush();
     } else if (!this.timer) {
-      this.timer = setTimeout(() => this.flush(), this.batchTimeoutMs);
+      this.timer = setTimeout(() => this.scheduleFlush(), this.batchTimeoutMs);
     }
   }
 
-  private async flush(): Promise<void> {
+  private scheduleFlush(): void {
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
     }
 
+    // Chain flushes so concurrent calls are serialised
+    this.flushPromise = (this.flushPromise ?? Promise.resolve()).then(() =>
+      this.flush()
+    );
+  }
+
+  private async flush(): Promise<void> {
     const batch = this.buffer.splice(0, this.batchSize);
     if (batch.length === 0) return;
 

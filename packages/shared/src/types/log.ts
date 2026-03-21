@@ -4,7 +4,7 @@ export type LogLevel = 'debug' | 'info' | 'warn' | 'error' | 'fatal';
 
 export interface ILog {
   _id: Types.ObjectId;
-  playerId: string | null;
+  playerId: string;
   level: LogLevel;
   action: string;
   message: string;
