@@ -28,8 +28,8 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    expose:
+      - "6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -42,7 +42,7 @@ services:
       context: .
       dockerfile: services/api-gateway/Dockerfile
     ports:
-      - "3000:3000"
+      - "3010:3000"
     environment:
       API_GATEWAY_PORT: 3000
       PLAYER_SERVICE_URL: http://player-service:3001

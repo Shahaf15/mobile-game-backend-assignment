@@ -14,42 +14,47 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok', service: 'api-gateway' });
 });
 
-// Player Service: /api/players/*
+// In http-proxy-middleware v3, when mounted via app.use('/prefix', proxy),
+// Express strips the prefix before the middleware sees the path.
+// pathRewrite must match what the middleware receives (path without the mount prefix).
+
+// Leaderboard: /api/players/leaderboard -> /players/leaderboard
 app.use(
   '/api/players/leaderboard',
   createProxyMiddleware({
     target: config.services.leaderboard,
     changeOrigin: true,
-    pathRewrite: { '^/api/players/leaderboard': '/players/leaderboard' },
+    pathRewrite: { '^/': '/players/leaderboard' },
   })
 );
 
+// Player: /api/players/* -> /players/*
 app.use(
   '/api/players',
   createProxyMiddleware({
     target: config.services.player,
     changeOrigin: true,
-    pathRewrite: { '^/api/players': '/players' },
+    pathRewrite: { '^/': '/players/' },
   })
 );
 
-// Score Service: /api/scores/*
+// Score: /api/scores/* -> /scores/*
 app.use(
   '/api/scores',
   createProxyMiddleware({
     target: config.services.score,
     changeOrigin: true,
-    pathRewrite: { '^/api/scores': '/scores' },
+    pathRewrite: { '^/': '/scores/' },
   })
 );
 
-// Log Service: /api/logs/*
+// Log: /api/logs/* -> /logs/*
 app.use(
   '/api/logs',
   createProxyMiddleware({
     target: config.services.log,
     changeOrigin: true,
-    pathRewrite: { '^/api/logs': '/logs' },
+    pathRewrite: { '^/': '/logs/' },
   })
 );
 
