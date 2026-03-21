@@ -1,0 +1,140 @@
+services:
+  # Infrastructure
+  mongodb:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_running"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Application Services
+  api-gateway:
+    build:
+      context: .
+      dockerfile: services/api-gateway/Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      API_GATEWAY_PORT: 3000
+      PLAYER_SERVICE_URL: http://player-service:3001
+      SCORE_SERVICE_URL: http://score-service:3002
+      LEADERBOARD_SERVICE_URL: http://leaderboard-service:3003
+      LOG_SERVICE_URL: http://log-service:3004
+    depends_on:
+      player-service:
+        condition: service_started
+      score-service:
+        condition: service_started
+      leaderboard-service:
+        condition: service_started
+      log-service:
+        condition: service_started
+
+  player-service:
+    build:
+      context: .
+      dockerfile: services/player-service/Dockerfile
+    expose:
+      - "3001"
+    environment:
+      PLAYER_SERVICE_PORT: 3001
+      MONGODB_URI: mongodb://mongodb:27017/game-backend
+    depends_on:
+      mongodb:
+        condition: service_healthy
+
+  score-service:
+    build:
+      context: .
+      dockerfile: services/score-service/Dockerfile
+    expose:
+      - "3002"
+    environment:
+      SCORE_SERVICE_PORT: 3002
+      MONGODB_URI: mongodb://mongodb:27017/game-backend
+    depends_on:
+      mongodb:
+        condition: service_healthy
+
+  leaderboard-service:
+    build:
+      context: .
+      dockerfile: services/leaderboard-service/Dockerfile
+    expose:
+      - "3003"
+    environment:
+      LEADERBOARD_SERVICE_PORT: 3003
+      MONGODB_URI: mongodb://mongodb:27017/game-backend
+      REDIS_URL: redis://redis:6379
+      LEADERBOARD_CACHE_TTL: 60
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  log-service:
+    build:
+      context: .
+      dockerfile: services/log-service/Dockerfile
+    expose:
+      - "3004"
+    environment:
+      LOG_SERVICE_PORT: 3004
+      RABBITMQ_URL: amqp://rabbitmq:5672
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  log-worker:
+    build:
+      context: .
+      dockerfile: services/log-worker/Dockerfile
+    environment:
+      MONGODB_URI: mongodb://mongodb:27017/game-backend
+      RABBITMQ_URL: amqp://rabbitmq:5672
+      BATCH_SIZE: 50
+      BATCH_TIMEOUT_MS: 2000
+      RATE_LIMIT_MAX_TOKENS: 100
+      RATE_LIMIT_REFILL_RATE: 20
+      MAX_CONCURRENCY: 3
+      PREFETCH_COUNT: 100
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    deploy:
+      replicas: 2
+
+volumes:
+  mongo-data:
