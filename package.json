@@ -1,0 +1,17 @@
+{
+  "name": "mobile-game-backend",
+  "version": "1.0.0",
+  "description": "Mobile game backend microservices architecture",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "services/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "clean": "rm -rf packages/*/dist services/*/dist"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "name": "@game-backend/shared",
+  "version": "1.0.0",
+  "description": "Shared types, schemas, and utilities for game backend services",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "arktype": "^2.1.0",
+    "mongoose": "^8.9.0",
+    "pino": "^9.6.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  },
+  "peerDependencies": {
+    "express": "^4.21.0"
+  }
+}
