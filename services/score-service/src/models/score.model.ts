@@ -1,4 +1,4 @@
-import mongoose, { Schema, Document, Types } from 'mongoose';
+import mongoose, { Schema, Document } from 'mongoose';
 import { IScore } from '@game-backend/shared';
 
 export interface ScoreDocument extends Omit<IScore, '_id'>, Document {}
