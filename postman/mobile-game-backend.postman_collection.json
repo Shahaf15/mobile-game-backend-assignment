@@ -147,9 +147,10 @@
       "name": "Leaderboard",
       "item": [
         {
-          "name": "Get Leaderboard (Paginated)",
+          "name": "Get Leaderboard - Page 1",
           "request": {
             "method": "GET",
+            "description": "Returns the top players ranked by total score. Rankings are served from a Redis sorted set (ZREVRANGE) and updated in real-time on every score submission via ZINCRBY. Player display info and gamesPlayed are fetched from MongoDB for this page only.",
             "url": {
               "raw": "{{baseUrl}}/api/players/leaderboard?page=1&limit=10",
               "host": ["{{baseUrl}}"],
@@ -158,6 +159,28 @@
                 {
                   "key": "page",
                   "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "10"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Leaderboard - Page 2",
+          "request": {
+            "method": "GET",
+            "description": "Fetches the second page of the leaderboard. Ranks continue sequentially (rank 11, 12, ...) based on position in the Redis sorted set.",
+            "url": {
+              "raw": "{{baseUrl}}/api/players/leaderboard?page=2&limit=10",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "players", "leaderboard"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "2"
                 },
                 {
                   "key": "limit",
