@@ -81,8 +81,11 @@ services:
     environment:
       SCORE_SERVICE_PORT: 3002
       MONGODB_URI: mongodb://mongodb:27017/game-backend
+      REDIS_URL: redis://redis:6379
     depends_on:
       mongodb:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
   leaderboard-service:

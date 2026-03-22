@@ -1,13 +1,24 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import mongoose from 'mongoose';
-import app from '../app';
-import { Score } from '../models/score.model';
 import {
   startMongoMemory,
   stopMongoMemory,
   clearCollections,
 } from '@game-backend/shared/src/test/mongo-helper';
+
+vi.mock('../redis', () => {
+  return {
+    default: {
+      zincrby: vi.fn().mockResolvedValue('100'),
+      on: vi.fn(),
+    },
+  };
+});
+
+import app from '../app';
+import { Score } from '../models/score.model';
+import redis from '../redis';
 
 beforeAll(startMongoMemory);
 afterAll(stopMongoMemory);
@@ -88,5 +99,28 @@ describe('GET /scores/top', () => {
     const res = await request(app).get('/scores/top?limit=3');
     expect(res.status).toBe(200);
     expect(res.body.data).toHaveLength(3);
+  });
+});
+
+describe('Redis Integration (score submission)', () => {
+  it('calls zincrby on Redis after successful score submission', async () => {
+    const mockZincrby = vi.mocked(redis.zincrby);
+    mockZincrby.mockClear();
+    const res = await request(app).post('/scores').send({ playerId: validPlayerId, score: 75 });
+
+    expect(res.status).toBe(201);
+    // zincrby is fire-and-forget, give microtask queue a tick
+    await new Promise((r) => setImmediate(r));
+    expect(mockZincrby).toHaveBeenCalledWith('leaderboard', 75, validPlayerId);
+  });
+
+  it('still returns 201 even if Redis zincrby rejects', async () => {
+    const mockZincrby = vi.mocked(redis.zincrby);
+    mockZincrby.mockRejectedValueOnce(new Error('Redis down'));
+    const res = await request(app).post('/scores').send({ playerId: validPlayerId, score: 50 });
+
+    expect(res.status).toBe(201);
+    expect(res.body.scoreId).toBeDefined();
+    // Redis failure must not affect HTTP response
   });
 });

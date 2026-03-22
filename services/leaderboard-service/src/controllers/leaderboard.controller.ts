@@ -19,65 +19,60 @@ export async function getLeaderboard(
   try {
     const page = Math.max(parseInt(req.query.page as string) || 1, 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit as string) || 10, 1), 100);
-    const skip = (page - 1) * limit;
+    const start = (page - 1) * limit;
+    const stop = start + limit - 1;
 
-    const cacheKey = `leaderboard:page:${page}:limit:${limit}`;
+    // Step 1: Get paginated slice from sorted set, highest score first
+    const [rawEntries, total] = await Promise.all([
+      redis.zrevrange('leaderboard', start, stop, 'WITHSCORES'),
+      redis.zcard('leaderboard'),
+    ]);
 
-    const cached = await redis.get(cacheKey);
-    if (cached) {
-      res.json(JSON.parse(cached));
+    // ZREVRANGE WITHSCORES returns flat array: [member, score, member, score, ...]
+    const pageEntries: { playerId: string; totalScore: number }[] = [];
+    for (let i = 0; i < rawEntries.length; i += 2) {
+      pageEntries.push({
+        playerId: rawEntries[i],
+        totalScore: parseFloat(rawEntries[i + 1]),
+      });
+    }
+
+    // Short-circuit for empty leaderboard
+    if (pageEntries.length === 0) {
+      res.json({
+        data: [],
+        pagination: { page, limit, total: 0, totalPages: 0 },
+      });
       return;
     }
 
-    const Score = mongoose.connection.collection('scores');
+    const playerIds = pageEntries.map((e) => new mongoose.Types.ObjectId(e.playerId));
+    const db = mongoose.connection.db!;
 
-    const [results, countResult] = await Promise.all([
-      Score.aggregate([
-        {
-          $group: {
-            _id: '$playerId',
-            totalScore: { $sum: '$score' },
-            gamesPlayed: { $sum: 1 },
-          },
-        },
-        { $sort: { totalScore: -1 } },
-        { $skip: skip },
-        { $limit: limit },
-        {
-          $lookup: {
-            from: 'players',
-            localField: '_id',
-            foreignField: '_id',
-            as: 'player',
-          },
-        },
-        { $unwind: { path: '$player', preserveNullAndEmptyArrays: true } },
-        {
-          $project: {
-            _id: 0,
-            playerId: '$_id',
-            username: { $ifNull: ['$player.username', 'Unknown'] },
-            displayName: { $ifNull: ['$player.displayName', 'Unknown'] },
-            totalScore: 1,
-            gamesPlayed: 1,
-          },
-        },
-      ]).toArray(),
-      Score.aggregate([
-        { $group: { _id: '$playerId' } },
-        { $count: 'total' },
-      ]).toArray(),
+    // Step 2: Fetch player display info + gamesPlayed for this page only
+    const [playerDocs, gameCounts] = await Promise.all([
+      db.collection('players')
+        .find({ _id: { $in: playerIds } }, { projection: { username: 1, displayName: 1 } })
+        .toArray(),
+      db.collection('scores')
+        .aggregate([
+          { $match: { playerId: { $in: playerIds } } },
+          { $group: { _id: '$playerId', gamesPlayed: { $sum: 1 } } },
+        ])
+        .toArray(),
     ]);
 
-    const total = countResult[0]?.total || 0;
+    const playerMap = new Map(playerDocs.map((p) => [p._id.toString(), p]));
+    const gamesMap = new Map(gameCounts.map((g) => [g._id.toString(), g.gamesPlayed]));
 
-    const data: LeaderboardEntry[] = results.map((entry: any, index: number) => ({
-      playerId: entry.playerId.toString(),
-      username: entry.username,
-      displayName: entry.displayName,
+    // Step 3: Assemble response
+    const data: LeaderboardEntry[] = pageEntries.map((entry, i) => ({
+      playerId: entry.playerId,
+      username: playerMap.get(entry.playerId)?.username ?? 'Unknown',
+      displayName: playerMap.get(entry.playerId)?.displayName ?? 'Unknown',
       totalScore: entry.totalScore,
-      gamesPlayed: entry.gamesPlayed,
-      rank: skip + index + 1,
+      gamesPlayed: gamesMap.get(entry.playerId) ?? 0,
+      rank: start + i + 1,
     }));
 
     const response: PaginatedResponse<LeaderboardEntry> = {
@@ -89,8 +84,6 @@ export async function getLeaderboard(
         totalPages: Math.ceil(total / limit),
       },
     };
-
-    await redis.set(cacheKey, JSON.stringify(response), 'EX', config.cacheTtl);
 
     res.json(response);
   } catch (error) {
