@@ -98,7 +98,6 @@ services:
       LEADERBOARD_SERVICE_PORT: 3003
       MONGODB_URI: mongodb://mongodb:27017/game-backend
       REDIS_URL: redis://redis:6379
-      LEADERBOARD_CACHE_TTL: 60
     depends_on:
       mongodb:
         condition: service_healthy
