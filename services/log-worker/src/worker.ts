@@ -38,6 +38,14 @@ export async function startWorker(): Promise<void> {
   const ch = channel!;
   const conn = connection!;
 
+  // Declare exchange and queue (idempotent, safe to call multiple times)
+  await ch.assertExchange('logs.exchange', 'direct', { durable: true });
+  await ch.assertQueue(QUEUE_NAME, {
+    durable: true,
+    arguments: { 'x-max-priority': 10 },
+  });
+  await ch.bindQueue(QUEUE_NAME, 'logs.exchange', 'log.ingest');
+
   // Set prefetch for concurrency control at the consumer level
   await ch.prefetch(config.prefetchCount);
 
