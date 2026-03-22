@@ -15,23 +15,19 @@ A TypeScript monorepo for a mobile game backend built with Node.js microservices
           +---------v--------+   +--------v---------+   +------v-------+
           |  Player Service  |   |   Score Service  |   | Log Service  |
           |      :3001       |   |       :3002      |   |    :3004     |
-          +---------+--------+   +--------+---------+   +------+-------+
-                    |                     |                    |
-                    |          +----------v---------+          |
-                    |          | Leaderboard        |          |
-                    |          | Service :3003      |          |
-                    |          +----+----------+----+          |
-                    |               |          |               |
-          +---------v---------------v--+  +----v-+    +-------v-----+
-          |           MongoDB          |  |Redis |    |  RabbitMQ   |
-          |            :27017          |  | :6379|    |  Priority   |
-          +----------------------------+  +------+    |    Queue    |
-                                                      +------+------+
-                                                             |
-                                                   +---------v---------+
-                                                   |   Log Worker x2   |
-                                                   | batch writes logs |
-                                                   +-------------------+
+          +---------+--------+   +---+----------+---+   +------+-------+
+                    |               |              |            |
+                    |    ZINCRBY (fire-and-forget) |            |
+                    |               |         +----v-+  +-------v-----+
+                    |          +----v---------+Redis |  |  RabbitMQ   |
+                    |          | Leaderboard  | :6379|  |  Priority   |
+                    |          | Service :3003+------+  |    Queue    |
+                    |          +----+----------+         +------+------+
+                    |               |  ZREVRANGE                |
+          +---------v---------------v--+               +---------v---------+
+          |           MongoDB          |               |   Log Worker x2   |
+          |            :27017          |               | batch writes logs |
+          +----------------------------+               +-------------------+
 ```
 
 ## Services
@@ -41,12 +37,12 @@ A TypeScript monorepo for a mobile game backend built with Node.js microservices
 | API Gateway | 3010 externally, 3000 in-container | Reverse proxy and single public entry point |
 | Player Service | 3001 | Player CRUD |
 | Score Service | 3002 | Score submission and top scores |
-| Leaderboard Service | 3003 | Aggregated leaderboard with Redis caching |
+| Leaderboard Service | 3003 | Real-time leaderboard backed by Redis sorted set |
 | Log Service | 3004 | Accepts client logs and publishes them to RabbitMQ |
 | Log Worker | n/a | Consumes log messages and stores them in MongoDB |
 | MongoDB | 27017 | Primary data store |
 | RabbitMQ | 5672 / 15672 | Queue transport and management UI |
-| Redis | 6379 (internal) | Leaderboard cache |
+| Redis | 6379 (internal) | Leaderboard sorted set (`ZINCRBY` / `ZREVRANGE`) |
 
 ## Tech Stack
 
@@ -181,10 +177,11 @@ Run all tests across all services:
 npm test
 ```
 
-This runs 74+ tests covering:
+This runs 76+ tests covering:
 - Player CRUD operations
 - Score submission and retrieval
-- Leaderboard aggregation and pagination
+- Leaderboard ranking, pagination, and sorted set behavior
+- Redis fire-and-forget resilience (score still saves when Redis is down)
 - Log ingestion and RabbitMQ publishing
 - Batch processing, rate limiting, and semaphore concurrency
 - Input validation schemas
@@ -408,16 +405,22 @@ Client Request
     ↓
 API Gateway (routes by path)
     ↓
-┌─────────────────────────────────────────────────────┐
-│                                                     │
-├→ POST /api/players → Player Service → MongoDB      │
-├→ GET /api/players/:id → Player Service → MongoDB   │
-├→ POST /api/scores → Score Service → MongoDB        │
-├→ GET /api/scores/top → Score Service → MongoDB     │
-├→ GET /api/players/leaderboard → Leaderboard        │
-│     Service → MongoDB aggregation + Redis cache    │
-│                                                     │
-└─────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                                                              │
+├→ POST /api/players  → Player Service  → MongoDB             │
+├→ GET  /api/players/:id → Player Service → MongoDB           │
+│                                                              │
+├→ POST /api/scores   → Score Service   → MongoDB (save)      │
+│                          └─ ZINCRBY leaderboard (Redis)     │
+│                              fire-and-forget, non-blocking  │
+│                                                              │
+├→ GET  /api/scores/top → Score Service → MongoDB             │
+│                                                              │
+├→ GET  /api/players/leaderboard → Leaderboard Service        │
+│       ├─ ZREVRANGE leaderboard (Redis sorted set) → ranks   │
+│       └─ MongoDB: fetch displayName + gamesPlayed for page  │
+│                                                              │
+└──────────────────────────────────────────────────────────────┘
     ↓
 Response to Client (synchronous, blocking)
 ```
@@ -454,23 +457,70 @@ Log Service
 
 **Why asynchronous?** The client doesn't wait for the log to be written to the database. It gets an immediate 202 response, and the system processes logs in the background at a controlled rate.
 
-### Leaderboard Caching
+### Leaderboard (Redis Sorted Set)
+
+Redis is the ranking index. MongoDB is the source of truth for scores and player data.
+
+#### Write path — score submission
 
 ```
-Client GET /api/players/leaderboard
+POST /api/scores
     ↓
-Check Redis cache key
-  ├─ Cache HIT (< 60s old) → Return cached response ✓ (fast)
-  └─ Cache MISS
-      ├─ MongoDB aggregation pipeline:
-      │  • Group scores by playerId, sum totalScore
-      │  • Join with players collection
-      │  • Paginate and rank results
-      └─ Store in Redis (60s TTL)
-      └─ Return response
+Score Service
+    ├─ Validate input
+    ├─ Save to MongoDB (scores collection)  ← source of truth
+    ├─ Return HTTP 201 to client
+    └─ ZINCRBY leaderboard <score> <playerId>  ← fire-and-forget
+         (runs after response is sent; Redis failure never blocks the request)
 ```
 
-**Trade-off:** Up to 60 seconds of stale data, but significantly reduces MongoDB load. For leaderboards in games, this is acceptable.
+#### Read path — leaderboard
+
+```
+GET /api/players/leaderboard?page=1&limit=10
+    ↓
+Leaderboard Service
+    ├─ ZREVRANGE leaderboard <start> <stop> WITHSCORES  → ranked player IDs + totals
+    ├─ ZCARD leaderboard                                → total player count
+    │
+    └─ MongoDB (scoped to this page only, max `limit` players):
+        ├─ players collection  → username, displayName
+        └─ scores collection   → gamesPlayed (count per playerId)
+    ↓
+Assemble and return paginated response
+```
+
+**Why sorted set instead of a TTL cache:**
+
+| | Old approach (TTL cache) | Current approach (sorted set) |
+|---|---|---|
+| Ranking data source | MongoDB `$group` on all scores every 60s | Redis sorted set, updated on every score write |
+| Read cost | O(all score docs) per cache miss | O(log N + page size) always |
+| Staleness | Up to 60 seconds | Near real-time (updated in same request) |
+| MongoDB query on read | Full collection scan | Targeted index scan on `limit` player IDs only |
+
+#### Cold-start rebuild
+
+If Redis is empty on startup (e.g. after a Redis restart), the leaderboard-service automatically rebuilds the sorted set from MongoDB before serving any requests:
+
+```
+leaderboard-service starts
+    ↓
+ZCARD leaderboard
+  ├─ > 0 → sorted set intact, skip rebuild
+  └─ = 0 → sorted set empty
+        ↓
+      MongoDB $group: sum all scores per playerId
+        ↓
+      Redis pipeline: ZADD leaderboard <score> <playerId>  (bulk, single round-trip)
+        ↓
+      Sorted set rebuilt — service opens for requests
+```
+
+**Failure behaviour:**
+- Redis down during score submission → `ZINCRBY` fails silently, score is still saved to MongoDB, HTTP 201 returned
+- Redis down during leaderboard read → HTTP 500 until Redis recovers
+- Redis wiped and leaderboard-service restarted → full rebuild from MongoDB, no data loss
 
 ---
 
@@ -510,7 +560,7 @@ Example: In low traffic (5 logs/sec), messages wait up to 2s before writing. In 
 ## Design Notes
 
 - `@game-backend/shared` contains shared schemas, types, middleware, and MongoDB/logger utilities
-- Leaderboard responses are cached in Redis with `LEADERBOARD_CACHE_TTL`
+- Leaderboard rankings are stored in a Redis sorted set (`leaderboard` key); MongoDB is the source of truth for score data
 - Services are independently buildable and deployable, while sharing common runtime contracts through npm workspaces
 
 ## Project Structure
@@ -522,12 +572,33 @@ services/
   api-gateway/             Reverse proxy entry point
   player-service/          Player CRUD service
   score-service/           Score service
-  leaderboard-service/     Leaderboard aggregation and cache
+  leaderboard-service/     Leaderboard ranking via Redis sorted set
   log-service/             Log ingestion and RabbitMQ publisher
   log-worker/              RabbitMQ consumer and batch writer
 postman/
   mobile-game-backend.postman_collection.json
 ```
+
+## Future Improvements
+
+### Leaderboard: MongoDB fallback when Redis is unavailable
+
+Currently, if Redis is down, `GET /api/players/leaderboard` returns HTTP 500. A production hardening step would be to catch the Redis error in the controller and fall back to a MongoDB `$group` aggregation:
+
+```
+Redis ZREVRANGE throws
+    ↓
+Fall back to MongoDB:
+  $group scores by playerId → $sort → $skip → $limit
+    ↓
+Same response shape returned to client (slower, but available)
+```
+
+This was intentionally deferred — the sorted set covers the normal case with significantly better performance, and Redis is a highly reliable dependency. The fallback adds complexity and the cold-start rebuild already handles the restart scenario.
+
+### Score-service: replay missed ZINCRBY on reconnect
+
+If Redis is down when a score is submitted, the sorted set diverges from MongoDB. On the next leaderboard-service restart the cold-start rebuild corrects it, but in between the leaderboard shows stale ranks. A more active fix would be for the score-service to detect reconnection and replay any missed `ZINCRBY` calls from MongoDB.
 
 ## Postman
 
